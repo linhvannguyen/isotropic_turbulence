@@ -1,0 +1,114 @@
+clear all; close all; clc;
+path(path,'/home/nguyen/Documents/Codes/isotropic/DictionaryLearning/funcs');
+
+%% INITIAL PARAMS
+Nh=96; % Number of grid-point in HR field
+scale=3;
+Nl=Nh/scale;
+
+size_l=8; 
+patchsize_h = size_l*scale; % size of HR patches
+patchsize_l = patchsize_h; % 4x4 LR patches
+
+dim_h=patchsize_h^2;
+dim_l=4*patchsize_l^2;
+dim_l_pca=100;
+
+nc = netcdf('/data/ISOTROPIC/NS3D_DNS_FORCE_384/TRAININGPLANES_downsampled4_HR.nc','r');
+Nx = nc('Nt').itsDimsize;
+close(nc)
+
+overlap=7; % at LR
+num_patch=255744; % total number of patches
+
+params.lambda=0.2; % params.lambda=1*1e-5, overlap=7
+params.K=3*patchsize_h^2;  
+
+[gridz_h,gridy_h]=meshgrid(1:Nh+patchsize_h,1:Nh+patchsize_h);
+gridz_l=gridz_h(2:scale:end,2:scale:end);
+gridy_l=gridy_h(2:scale:end,2:scale:end);
+
+%% LOAD DICTIONARY 
+ODL_FILENAME=strcat('/data/ISOTROPIC/DICTIONARYLEARNING/downsample4_3_Elad/dictionaries/patchsize08/DICTIONARY_patchesHRLR_patchesLRfeatures_K',num2str(params.K,'%.4d'),'_lambda',strrep(num2str(params.lambda,'%.2f'),'.',''),'.mat');
+load(ODL_FILENAME);
+
+D_HR = D_HR./repmat(sqrt(sum(D_HR.^2, 1)), dim_h, 1);
+D_HR=sqrt(dim_h/dim_l_pca)*D_HR; % scale the HR dictionary (very important!!!)
+D_LR = D_LR./repmat(sqrt(sum(D_LR.^2, 1)), dim_l_pca, 1);
+
+%% PLOT DICTIONARY
+[~,ids]=sort(sum(CoefMatrix.^2,2),'descend');
+fig_HR=figure(); ImD=displayPatches(D_HR(:,ids)); axis off;
+% fig_LR=figure(); ImD2=displayPatches(D_LR(:,ids)); axis off;
+
+%% FILTERS
+% O = zeros(1, scale-1);
+O=0;
+hf1 = [-1,O,1]; vf1 = hf1';
+hf2 = [1,O,-2,O,1]; vf2 = hf2';
+
+%% SR
+params.mode=2; % min_{D in C} (1/n) sum_{i=1}^n (1/2)||x_i-Dalpha_i||_2^2 + lambda||alpha_i||_1 + lambda_2||alpha_i||_2^2
+params.lambda=1*1e-5; 
+params.lambda2=1*1e-3;
+scaling_factor=1; % is this sqrt(patchsize_h*patchsize_h/dim_l_pca) (currently dim_l_pca=100; best: 2.15)
+fprintf('Increasing resolution...\n');
+
+t=200;
+
+% Load data
+nc = netcdf('/data/ISOTROPIC/NS3D_DNS_FORCE_384/RECONSTRUCTINGPLANES_downsampled4_HR.nc','r');
+X_HR_org=nc{'velocity_x_HR'}(t,:,:);
+close(nc)
+
+% LR field
+X_LR=imresize(single(X_HR_org), 1/scale,'bicubic');
+X_LR_enlarged = [X_LR(Nl-size_l/2+1:Nl,Nl-size_l/2+1:Nl),X_LR(Nl-size_l/2+1:Nl,:),X_LR(Nl-size_l/2+1:Nl,1:size_l/2);...
+    X_LR(:,Nl-size_l/2+1:Nl),X_LR,X_LR(:,1:size_l/2);...
+    X_LR(1:size_l/2,Nl-size_l/2+1:Nl),X_LR(1:size_l/2,:),X_LR(1:size_l/2,1:size_l/2)];
+X_LR_interp=interp2(gridz_l,gridy_l,X_LR_enlarged,gridz_h,gridy_h,'spline');
+
+% SR
+start=tic();
+
+[X_HR_rec_smallscales,CoefMatrix]=SR_nguyen(X_LR_interp, D_HR, D_LR, params,'FLUC_FEATURES_INTERP', scale, overlap, {hf1, vf1, hf2, vf2},V_pca,scaling_factor);
+X_HR_rec = X_LR_interp+X_HR_rec_smallscales;
+
+%%
+X_LR_interp_Fea=extract_features(X_LR_interp,{hf1, vf1, hf2, vf2});
+patches_LR_Fea=extract_patches(X_LR_interp_Fea, scale, patchsize_h, overlap, 'FEATURES');
+patches_LR_Fea_pca = V_pca' * patches_LR_Fea;
+
+patchs_HRLR=extract_patches(X_HR_rec_smallscales, scale, patchsize_h, overlap, 'HR');
+D_HR = (patches_LR_Fea * CoefMatrix')/(full(CoefMatrix * CoefMatrix'));
+%% PLOT
+% REMOVE BOLDER (translation is not complete near bolder)
+X_HR_rec=X_HR_rec(patchsize_h/2+1:end-patchsize_h/2,patchsize_h/2+1:end-patchsize_h/2);
+X_LR_interp=X_LR_interp(patchsize_h/2+1:end-patchsize_h/2,patchsize_h/2+1:end-patchsize_h/2);
+
+NRMSE1=sqrt(sum((X_LR_interp(:)-X_HR_org(:)).^2))/sqrt(sum(X_HR_org(:).^2));
+NRMSE2=sqrt(sum((X_HR_rec(:)-X_HR_org(:)).^2))/sqrt(sum(X_HR_org(:).^2));
+fprintf(['SR snapshot t=',num2str(t,'%.3d'),' in ',num2str(toc(start)/60,'%.3f'),' minute(s), improves NRMSE by ', num2str((1-NRMSE2/NRMSE1)*100,'%.2f'),' percents\n']);
+
+
+fig=figure();
+set(fig, 'Position', [200 200 700 650]);
+set(fig,'color','w')
+
+ax(1)=subplot(2,2,1,'position',[0.05 0.525 0.425 0.425]); 
+imagesc(X_HR_org); caxis([-4 4]); 
+set(gca,'YDir','normal'); axis off; axis equal;
+title('Reference')
+
+ax(2)=axes('position',[0.05 0.05 0.425 0.425]); 
+imagesc(X_LR_interp); caxis([-4 4]); set(gca,'YDir','normal'); axis off; axis equal;
+title('Interpolation')
+
+ax(3)=axes('position',[0.5 0.525 0.425 0.425]); 
+imagesc(X_HR_rec); caxis([-4 4]); set(gca,'YDir','normal'); axis off; axis equal;
+title('SR')
+
+ax(4)=axes('position',[0.5 0.05 0.425 0.425]); 
+imagesc(X_HR_rec-X_LR_interp); caxis([-1 1]); set(gca,'YDir','normal'); axis off; axis equal;
+title('SR')
+

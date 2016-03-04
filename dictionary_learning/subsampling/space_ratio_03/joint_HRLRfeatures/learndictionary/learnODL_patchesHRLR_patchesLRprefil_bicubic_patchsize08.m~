@@ -1,0 +1,69 @@
+clear all; close all; clc;
+
+%% INITIAL PARAMS
+Nh=96; % Number of grid-point in HR field
+scale=3;
+Nl=Nh/scale;
+patchsize_l = 8; % 4x4 LR patches
+patchsize_h = patchsize_l*scale; % size of HR patches
+
+num_patch=12*12; % number of patches 
+dim_h=patchsize_h^2;
+dim_l=patchsize_l^2;
+
+nc = netcdf('/data/ISOTROPIC/NS3D_DNS_FORCE_384/TRAININGPLANES_downsampled4_HR.nc','r');
+Nx = nc('Nt').itsDimsize;
+close(nc)
+
+%% Load patches
+PATCHES_FILENAME=strcat('/data/ISOTROPIC/DICTIONARYLEARNING/downsample4_3_Elad/patches/patches_all_ratio',num2str(scale,'%.1d'),'_patchsize',num2str(patchsize_l,'%.2d'),'_numpatch',num2str(num_patch*Nx,'%.6d'),'.mat');
+
+load(PATCHES_FILENAME, 'patches_HRLR_all','patches_LR_prefil_bicubic_all');
+
+% SUBSTRACT MEAN AND PRE-NORMALIZE ALL PATCHES
+patches_HRLR_all = patches_HRLR_all - repmat(mean(patches_HRLR_all,2),1,size(patches_HRLR_all,2));
+patches_HRLR_all = patches_HRLR_all./repmat(sqrt(sum(patches_HRLR_all.^2)), dim_h, 1);
+patches_LR_prefil_bicubic_all = patches_LR_prefil_bicubic_all - repmat(mean(patches_LR_prefil_bicubic_all,2),1,size(patches_LR_prefil_bicubic_all,2));
+patches_LR_prefil_bicubic_all = patches_LR_prefil_bicubic_all./repmat(sqrt(sum(patches_LR_prefil_bicubic_all.^2)), dim_l, 1);
+
+% JOINT PATCHES
+patches_LR_prefil_bicubic_all = (1/patchsize_l)*patches_LR_prefil_bicubic_all;
+patches_HRLR_all=(1/patchsize_h)*patches_HRLR_all;
+
+patches_LR_prefil_bicubic_all = patches_LR_prefil_bicubic_all./repmat(sqrt(sum(patches_LR_prefil_bicubic_all.^2, 1)), dim_l,1);
+patches_LR_prefil_bicubic_all = patches_LR_prefil_bicubic_all - repmat(mean(patches_LR_prefil_bicubic_all,2),1,size(patches_LR_prefil_bicubic_all,2));
+
+patches_HRLR_all = patches_HRLR_all./repmat(sqrt(sum(patches_HRLR_all.^2, 1)), dim_h,1);
+patches_HRLR_all = patches_HRLR_all - repmat(mean(patches_HRLR_all,2),1,size(patches_HRLR_all,2));
+
+%% ONLINE DICTIONARY LEARNING
+params.mode=2; % min_{D in C} (1/n) sum_{i=1}^n (1/2)||x_i-Dalpha_i||_2^2 + lambda||alpha_i||_1 + lambda_2||alpha_i||_2^2
+params.lambda2=0; % sparsity is too high maybe???
+params.numThreads=4; % number of threads
+% params.batchsize=512; % use default value
+params.iter=1000;  % max number of iterations.
+
+lambdas=[0.05,0.2];
+Ks=[1*patchsize_h^2,3*patchsize_h^2];
+
+for i=1:numel(lambdas)
+    for j=1:numel(Ks)
+        %% LEARN DICT
+        params.lambda=lambdas(i);
+        params.K=Ks(j);
+
+        fprintf(['Evaluating cost function for lambda=',num2str(params.lambda,'%.3f'),', K=',num2str(params.K,'%.4d'),'\n']);
+        
+        [D_LR,~] = mexTrainDL(patches_LR_prefil_bicubic_all,params);
+        CoefMatrix=mexLasso(patches_LR_prefil_bicubic_all,D_LR,params);
+        
+        D_HR = (patches_HRLR_all * CoefMatrix')/(full(CoefMatrix * CoefMatrix'));
+%         ODL_FILENAME=strcat('/data/ISOTROPIC/DICTIONARYLEARNING/downsample4_3_Elad/dictionaries/patchsize08/DICTIONARY_patchesHRLR_patchesLRprefilbicubic_K',num2str(params.K,'%.4d'),'_lambda',strrep(num2str(params.lambda,'%.2f'),'.',''),'.mat');
+%         save(ODL_FILENAME,'D','CoefMatrix');
+
+    end
+end     
+
+[~,ids]=sort(sum(CoefMatrix.^2,2),'descend');
+fig_HR=figure(); set(fig_HR, 'Color', 'w'); ImD=displayPatches(D_HR(:,ids(1:2:end))); axis off;
+fig_LR=figure(); set(fig_HR, 'Color', 'w'); ImD2=displayPatches(D_LR(:,ids(1:2:end))); axis off;

@@ -1,0 +1,73 @@
+clear all; close all; clc;
+
+%% INITIAL PARAMS
+Nh=96; % Number of grid-point in HR field
+scale=3;
+Nl=Nh/scale;
+patchsize_l = 8; % 4x4 LR patches
+patchsize_h = patchsize_l*scale; % size of HR patches
+
+num_patch=12*12; % number of patches extracted from each plane
+dim_h=patchsize_h^2;
+dim_l=patchsize_l^2;
+
+%% Load data
+nc = netcdf('/data/ISOTROPIC/NS3D_DNS_FORCE_384/TRAININGPLANES_downsampled4_HR.nc','r');
+velocity_x_HR=nc{'velocity_x_HR'}(:,:,:);
+close(nc)
+%% Random indices at HR or LR
+Nx=size(velocity_x_HR,1); % number of planes. Total of patches is Nx*num_patch
+
+xl = randperm(Nl-2*patchsize_l-1)+ patchsize_l; % taking care of bolder (convolution)
+yl = randperm(Nl-2*patchsize_l-1)+ patchsize_l; % taking care of bolder (convolution)
+xl=xl(1:sqrt(num_patch));
+yl=yl(1:sqrt(num_patch));
+
+[Xl,Yl] = meshgrid(xl,yl);
+
+xh=zeros(size(xl)); yh=xh; % starting point of HR patches
+for i=1:numel(xl)
+    % (a,b) in LR corresponding to ((a-1)*spacing+1:a*spacing,(b-1)*spacing+1:b*spacing) in HR
+    xh(1,i) = (xl(i)-1)*scale+1;
+    yh(1,i) = (yl(i)-1)*scale+1;
+end
+[Xh,Yh] = meshgrid(xh,yh);
+
+xrow_l = Xl(:); ycol_l = Yl(:); 
+xrow_h = Xh(:); ycol_h = Yh(:); 
+
+%% FILTERS
+O = zeros(1, scale-1);
+% O=0;
+hf1 = [-1,O,1];
+vf1 = hf1';
+hf2 = [1,O,-2,O,1];
+vf2 = hf2';
+
+%% EXTRACT PATCHES
+patchs_HR_all=zeros(dim_h,num_patch*Nx);
+patchs_LR_features_all = zeros(4*dim_h,num_patch*Nx);
+patchs_LR_features_sub_all = zeros(4*dim_l,num_patch*Nx);
+
+patchs_HRLR_all = zeros(dim_h,num_patch*Nx);
+
+[gridz_h,gridy_h]=meshgrid(1:Nh,1:Nh);
+gridz_l=gridz_h(2:scale:end,2:scale:end);
+gridy_l=gridy_h(2:scale:end,2:scale:end);
+
+plane_id=1;
+X_HR=squeeze(velocity_x_HR(plane_id,:,:));   
+X_LR=imresize(single(X_HR), 1/scale,'bicubic');
+
+X_LR_interp=interp2(gridz_l,gridy_l,double(X_LR),gridz_h,gridy_h,'spline');
+
+
+%%
+fig1=figure(); imagesc(X_LR_interp); caxis([-4,4]);
+fig2=figure(); imagesc(conv2(X_LR_interp, hf1, 'same')); caxis([-2,2]);
+fig3=figure(); imagesc(conv2(X_LR_interp, vf1, 'same')); caxis([-2,2]);
+
+%%
+[FX,FY] = gradient(X_LR_interp);
+fig4=figure(); imagesc(FX); caxis([-1,1]);
+fig5=figure(); imagesc(FY); caxis([-1,1]);

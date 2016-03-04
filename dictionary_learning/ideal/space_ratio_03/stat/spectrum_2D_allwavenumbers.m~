@@ -1,0 +1,50 @@
+clear all; close all; clc;
+
+%% INITIAL PARAMS
+Nh=96; % Number of grid-point in HR field
+scale=3;
+Nl=Nh/scale;
+patchsize_l = 4; % 4x4 LR patches
+patchsize_h = patchsize_l*scale; % size of HR patches
+
+num_patch=12*12; % number of patches extracted from each plane
+dim_h=patchsize_h^2;
+dim_l=patchsize_l^2;
+
+%% Load training data
+nc = netcdf('/data/ISOTROPIC/NS3D_DNS_FORCE_384/TRAININGPLANES_downsampled4_HR.nc','r');
+velocity_x_HR=nc{'velocity_x_HR'}(:,:,:);
+close(nc)
+Nx=size(velocity_x_HR,1); % number of planes. Total of patches is Nx*num_patch
+
+% 2D FFT
+F_2D_training=zeros(Nh);
+for plane_id=1:Nx
+    X_HR=squeeze(velocity_x_HR(plane_id,:,:));
+    F_2D_training = F_2D_training+1/Nx*abs(fftn(X_HR));
+end
+
+%% Load reconstructing data
+nc = netcdf('/data/ISOTROPIC/NS3D_DNS_FORCE_384/RECONSTRUCTINGPLANES_downsampled4_HR.nc','r');
+velocity_x_HR=nc{'velocity_x_HR'}(:,:,:);
+close(nc)
+Nx=size(velocity_x_HR,1); % number of planes. Total of patches is Nx*num_patch
+
+% 2D FFT
+F_2D_testing=zeros(Nh);
+for plane_id=1:Nx
+    X_HR=squeeze(velocity_x_HR(plane_id,:,:));
+    F_2D_testing = F_2D_testing+1/Nx*abs(fftn(X_HR));
+end
+
+%%
+nc = netcdf('/data/ISOTROPIC/NS3D_DNS_FORCE_384/RECONSTRUCTINGPLANES_downsampled4_HR.nc','r');
+asnap=nc{'velocity_x_HR'}(10,:,:);
+close(nc)
+F_2D_asnap=fftn(asnap);
+coeffs=(F_2D_training./abs(F_2D_asnap)).^0.5;
+F_2D_asnap_update=coeffs.*F_2D_asnap;
+asnap2=ifftn(F_2D_asnap_update);
+fig1=figure(); imagesc(asnap); caxis([-4,4]);
+fig2=figure(); imagesc(real(asnap2)); caxis([-4,4]);
+fig3=figure(); imagesc(asnap-real(asnap2)); caxis([-4,4]);

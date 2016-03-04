@@ -1,0 +1,128 @@
+clear all; close all; clc;
+path(path,'/home/nguyen/Documents/Codes/isotropic/DictionaryLearning/funcs');
+
+%% INITIAL PARAMS
+Nh=96; % Number of grid-point in HR field
+scale=3;
+Nl=Nh/scale;
+patchsize_l = 8; % 8x8 LR patches
+patchsize_h = patchsize_l*scale; % size of HR patches
+
+dim_h=patchsize_h^2;
+dim_l=patchsize_l^2;
+
+nc = netcdf('/data/ISOTROPIC/NS3D_DNS_FORCE_384/TRAININGPLANES_downsampled4_HR.nc','r');
+Nx = nc('Nt').itsDimsize;
+close(nc)
+
+overlap=7; % at LR
+num_patch=255744; % total number of patches
+
+params.lambda=0.2; % params.lambda=0.001, overlap=9
+params.K=1*(dim_h+dim_l);  
+
+[gridz_h,gridy_h]=meshgrid(1:Nh,1:Nh);
+gridz_l=gridz_h(2:scale:end,2:scale:end);
+gridy_l=gridy_h(2:scale:end,2:scale:end);
+
+
+%% Load training data
+nc = netcdf('/data/ISOTROPIC/NS3D_DNS_FORCE_384/TRAININGPLANES_downsampled4_HR.nc','r');
+velocity_x_HR=nc{'velocity_x_HR'}(:,:,:);
+close(nc)
+Nx=size(velocity_x_HR,1); % number of planes. Total of patches is Nx*num_patch
+
+% 2D FFT
+F_2D_training=zeros(Nh);
+for plane_id=1:Nx
+    X_HR=squeeze(velocity_x_HR(plane_id,:,:));
+    F_2D_training = F_2D_training+1/Nx*abs(fftn(X_HR));
+end
+
+%% LOAD DICTIONARY 
+ODL_FILENAME=strcat('/data/ISOTROPIC/DICTIONARYLEARNING/downsample4_3/dictionaries/patchsize08/DICTIONARY_patchesHR_patchesLRprefilbicubic_K',num2str(params.K,'%.4d'),'_lambda',strrep(num2str(params.lambda,'%.2f'),'.',''),'.mat');
+load(ODL_FILENAME);
+D_HR = D(1:dim_h,:);
+D_LR = D(dim_h+1:end,:);
+
+D_HR = D_HR./repmat(sqrt(sum(D_HR.^2, 1)), dim_h, 1);
+D_HR=sqrt(dim_h)/sqrt(dim_l)*D_HR; % scale the HR dictionary (very important!!!)
+D_LR = D_LR./repmat(sqrt(sum(D_LR.^2, 1)), dim_l, 1);
+
+
+%% SR
+params.mode=2; % min_{D in C} (1/n) sum_{i=1}^n (1/2)||x_i-Dalpha_i||_2^2 + lambda||alpha_i||_1 + lambda_2||alpha_i||_2^2
+params.lambda=1*1e-6; 
+params.lambda2=0;
+
+fprintf('Increasing resolution...\n');
+ttds=200;
+
+nc = netcdf('/data/ISOTROPIC/NS3D_DNS_FORCE_384/RECONSTRUCTINGPLANES_downsampled4_HR.nc','r');
+for t=1:numel(ttds) 
+    % Load data
+    X_HR_org=nc{'velocity_x_HR'}(ttds(t),:,:);
+    
+    % LR field
+    X_LR=imresize(single(X_HR_org), 1/scale,'bicubic');
+    X_LR_interp=double(imresize(X_LR, scale,'bicubic'));
+%     X_LR_interp=interp2(gridz_l,gridy_l,X_LR,gridz_h,gridy_h,'spline');
+
+    % SR
+    start=tic();
+    X_HR_rec = SR_nguyen(double(X_LR), D_HR, D_LR, params,'NOINTERP', scale, overlap);
+end
+close(nc)
+
+
+%%
+F_2D_asnap=fftn(X_HR_rec);
+coeffs=(F_2D_training./abs(F_2D_asnap)).^0.5;
+F_2D_asnap_update=coeffs.*F_2D_asnap;
+X_HR_rec_2=ifftn(F_2D_asnap_update);
+fig1=figure(); imagesc(X_HR_rec); caxis([-4,4]);
+fig2=figure(); imagesc(real(X_HR_rec_2)); caxis([-4,4]);
+fig3=figure(); imagesc(X_HR_rec-real(X_HR_rec_2)); caxis([-4,4]);
+
+%% PLOT
+% fsize=16;
+% fname='CMU Serif';
+% set(0,'DefaultAxesFontName', fname)
+% set(0,'DefaultAxesFontSize', fsize)
+% set(0,'DefaultTextFontname', fname)
+% set(0,'DefaultTextFontSize', fsize)
+% 
+% 
+% fig=figure();
+% set(fig, 'Position', [200 200 700 650]);
+% set(fig,'color','w')
+% 
+% ax(1)=subplot(2,2,1,'position',[0.05 0.525 0.425 0.425]); 
+% imagesc(X_LR); caxis([-4 4]); 
+% set(gca,'YDir','normal'); axis off; axis equal;
+% title('LR')
+% 
+% ax(2)=axes('position',[0.05 0.05 0.425 0.425]); 
+% imagesc(X_LR_interp); caxis([-4 4]); set(gca,'YDir','normal'); axis off; axis equal;
+% title('Interpolation')
+% 
+% ax(3)=axes('position',[0.5 0.525 0.425 0.425]); 
+% imagesc(X_HR_rec); caxis([-4 4]); set(gca,'YDir','normal'); axis off; axis equal;
+% title('SR')
+% 
+% ax(4)=axes('position',[0.5 0.05 0.425 0.425]); 
+% imagesc(X_HR_org); caxis([-4 4]); set(gca,'YDir','normal'); axis off; axis equal;
+% title('Reference')
+% 
+% export_fig('reconstruction_patchsize08_patchesHR_patchesLRprefilbicubic','-eps');
+% close();
+
+%% FINAL STEP: COMPUTE ERROR
+% % REMOVE BOLDER (translation is not complete near bolder)
+% X_HR_org=X_HR_org(patchsize_h/2+1:end-patchsize_h/2,patchsize_h/2+1:end-patchsize_h/2);
+% X_HR_rec=X_HR_rec(patchsize_h/2+1:end-patchsize_h/2,patchsize_h/2+1:end-patchsize_h/2);
+% X_LR_interp=X_LR_interp(patchsize_h/2+1:end-patchsize_h/2,patchsize_h/2+1:end-patchsize_h/2);
+% 
+% NRMSE1=sqrt(sum((X_LR_interp(:)-X_HR_org(:)).^2))/sqrt(sum(X_HR_org(:).^2));
+% NRMSE2=sqrt(sum((X_HR_rec(:)-X_HR_org(:)).^2))/sqrt(sum(X_HR_org(:).^2));
+% fprintf(['SR snapshot t=',num2str(ttds(t),'%.3d'),' in ',num2str(toc(start)/60,'%.3f'),' minute(s), improves NRMSE by ', num2str((1-NRMSE2/NRMSE1)*100,'%.2f'),' percents\n']);
