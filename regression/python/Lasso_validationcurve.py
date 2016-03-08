@@ -55,47 +55,36 @@ for k in range(Dh):
     Xh_tr[:,k] = (Xh_tr[:,k]-mea_h[k])/sig_h[k]     
 
 
-############## RidgeCV ########################################################
-"""
-from sklearn.linear_model import RidgeCV
-n_alphas = 100
-alphas = np.append(0,np.linspace(1e-10, 100, n_alphas))
+############## LassoCV ########################################################
+from sklearn.linear_model import MultiTaskLassoCV
+n_alphas = 5
+alphas = np.logspace(-10, 0, n_alphas)
 
-ridge = RidgeCV(alphas = alphas, cv = 10, fit_intercept=False, normalize=False)
-ridge.fit(Xl_tr, Xh_tr)
+lasso = MultiTaskLassoCV(alphas = alphas, cv = 5, fit_intercept=False, normalize=False,n_jobs=3)
+lasso.fit(Xl_tr, Xh_tr)
 
-RR_lambda_opt = ridge.alpha_
+Lasso_lambda_opt = lasso.alpha_
 
-print('\n Optimal lambda:', RR_lambda_opt)
-"""
+print('\n Optimal lambda:', Lasso_lambda_opt)
 ############ Validation curve #################################################
-
+"""
 # validation curve
-from sklearn.linear_model import Ridge
+from sklearn.linear_model import Lasso
 from sklearn.learning_curve import validation_curve
 
-lambdas_range= np.logspace(-2, 4, 28)
-train_MSE, test_MSE = validation_curve(Ridge(),Xl_tr, Xh_tr, param_name="alpha", param_range=lambdas_range, 
+lambdas_range= np.append(0, np.logspace(0, 6, 28))
+train_MSE, test_MSE = validation_curve(Lasso(),Xl_tr, Xh_tr, param_name="alpha", param_range=lambdas_range, 
                                              scoring = "mean_squared_error", cv=10)
 
 # API always tries to maximize a loss function, so MSE is actually in the flipped sign
 train_MSE_mean = np.mean(-train_MSE, axis=1)
 train_MSE_std = np.std(-train_MSE, axis=1)
 test_MSE_mean = np.mean(-test_MSE, axis=1)
-test_MSE_std = np.std(-test_MSE, axis=1)
-    
-# save to file
-#import pickle
-#with open('/data/ISOTROPIC/regression/RR_crossvalidation.pickle', 'w') as f:
-#    pickle.dump([ridge, coefs_RR_lambdas, train_MSE, test_MSE], f)
-
-# Getting back the objects:
-#with open('data/ISOTROPIC/regression/RR_crossvalidation.pickle') as f:
-#    ridge, coefs_RR_lambdas, train_MSE, test_MSE = pickle.load(f)
-    
+test_MSE_std = np.std(-test_MSE, axis=1)  
 
 # save to .mat file
 import scipy.io as io
-#io.savemat('/data/ISOTROPIC/regression/RR_crossvalidation.mat', 
-#           dict(RR_lambda_opt=RR_lambda_opt, lambdas_range=lambdas_range, train_MSE=train_MSE, test_MSE = test_MSE))
-io.savemat('/data/ISOTROPIC/regression/RR_crossvalidation2.mat', dict(lambdas_range=lambdas_range, train_MSE=train_MSE, test_MSE = test_MSE))
+io.savemat('/data/ISOTROPIC/regression/Lasso_crossvalidation.mat', 
+           dict(Lasso_lambda_opt=Lasso_lambda_opt, lambdas_range=lambdas_range, train_MSE=train_MSE, test_MSE = test_MSE))
+"""
+           

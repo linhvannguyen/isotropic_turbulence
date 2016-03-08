@@ -6,7 +6,7 @@ Created on Thu March 1 23:17:41 2016
 """
 import numpy as np
 from netCDF4 import Dataset
-
+import matplotlib.pyplot as plt
 # Constants
 Nh = 96
 Nt = 37
@@ -54,27 +54,34 @@ for k in range(Dh):
     sig_h[k] = np.std(Xh_tr[:,k])
     Xh_tr[:,k] = (Xh_tr[:,k]-mea_h[k])/sig_h[k]     
 
-print np.shape(Xl_tr)[0]
 
+############## RidgeCV ########################################################
 # Load optimal lambda
 import scipy.io as sio
 mf = sio.loadmat('/data/ISOTROPIC/regression/RR_crossvalidation.mat', squeeze_me=True, struct_as_record=False)
 RR_lambda_opt = mf['RR_lambda_opt']
 print'Optimal lambda:', RR_lambda_opt
 
-# Learning curve 
 from sklearn.linear_model import Ridge
-from sklearn.learning_curve import learning_curve
-from sklearn import cross_validation
+ridge = Ridge(alpha=RR_lambda_opt, fit_intercept=False, normalize=False)
+ridge.fit(Xl_tr, Xh_tr)
+print np.shape(ridge.coef_)
 
-estimator = Ridge(alpha=RR_lambda_opt, fit_intercept=False, normalize=False)
-cv = cross_validation.ShuffleSplit(np.shape(Xl_tr)[0], n_iter=50, test_size=0.1, random_state=0)
-train_sizes, train_MSE, test_MSE = learning_curve(estimator, Xl_tr, Xh_tr, 
-                                                        cv=cv, n_jobs=4,
-                                                        train_sizes=np.linspace(.1, 1.0, 20),
-                                                        scoring = "mean_squared_error")
-                                                        
+coefs_RR=np.reshape(ridge.coef_[:,Dl/2+Nl/2],(96,96))
+
+ridge = Ridge(alpha=0.0, fit_intercept=False, normalize=False)
+ridge.fit(Xl_tr, Xh_tr)
+
+coefs_LSE=np.reshape(ridge.coef_[:,Dl/2+Nl/2],(96,96))
+
+##
+fig1 = plt.figure(figsize=(8, 7))
+plt.imshow(coefs_RR,interpolation='none')    
+plt.show()
+
+fig2 = plt.figure(figsize=(8, 7))
+plt.imshow(coefs_LSE,interpolation='none')    
+plt.show()
+
 # save to .mat file
-import scipy.io as io
-io.savemat('/data/ISOTROPIC/regression/RR_learningcurve.mat', 
-           dict(train_sizes=train_sizes, train_MSE=train_MSE, test_MSE=test_MSE))
+sio.savemat('/data/ISOTROPIC/regression/RR_sample_coefficients.mat', dict(coefs_RR=coefs_RR, coefs_LSE=coefs_LSE))
